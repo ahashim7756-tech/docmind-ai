@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0A192F" />
+  <title>DOCMIND AI – صياغتي | منصة الصياغة القانونية الذكية</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: { colors: { navy: '#0A192F', gold: '#FFD700' }, fontFamily: { cairo: ['Cairo', 'sans-serif'] } } }
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@4/dist/fp.min.js"></script>
+  <script src="https://unpkg.com/lucide@0.475.0/dist/umd/lucide.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: 'Cairo', sans-serif; background: #0A192F; color: #f8fafc; }
+    ::selection { background: #FFD700; color: #0A192F; }
+    .glass { background: rgba(255,255,255,0.05); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.1); }
+    .gold-shadow { box-shadow: 0 0 30px rgba(255,215,0,0.2); }
+    .pulse-recording { animation: pulseRing 1.5s ease-out infinite; border-color: #ef4444; }
+    @keyframes pulseRing { 0% { box-shadow: 0 0 0 0 rgba(239,68,68,.6); } 70% { box-shadow: 0 0 0 18px rgba(239,68,68,0); } 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); } }
+    @media print { body { background: white; color: black; } .no-print { display: none !important; } }
+  </style>
+</head>
+<body>
+  <div id="docmind-root"></div>
+
+  <script type="text/babel">
+    const { useEffect, useRef, useState } = React;
+
+    // =============== الإعدادات الأساسية ===============
+    const ADMIN_SECRET = "123456";
+    const FREE_TRIALS = 5;
+    const DEEPSEEK_API_KEY = 'sk-7aae0cf38f0741cfb1a67a0dbc9759c7'; // مفتاحك هنا
+    const DEEPSEEK_MODEL = 'deepseek-chat';
+
+    // =============== بصمة الجهاز ===============
+    async function getDeviceId() {
+      const fp = await FingerprintJS.load();
+      const result = await fp.get();
+      return result.visitorId;
+    }
+
+    // =============== الترخيص ===============
+    function isAdmin() { return localStorage.getItem('docmind_admin') === 'true'; }
+    function getRemainingTrials() {
+      const stored = localStorage.getItem('docmind_trials');
+      if (stored === null) { localStorage.setItem('docmind_trials', FREE_TRIALS.toString()); return FREE_TRIALS; }
+      return parseInt(stored, 10);
+    }
+    function consumeTrial() {
+      const remaining = getRemainingTrials();
+      if (remaining <= 0) return false;
+      localStorage.setItem('docmind_trials', (remaining - 1).toString());
+      return true;
+    }
+    function hasActiveSubscription() { return localStorage.getItem('docmind_subscription') === 'true'; }
+    async function activateSubscription(code) {
+      const upper = code.toUpperCase().trim();
+      if (upper.startsWith('DOCMIND-') || ["LAW2024","PREMIUM-001"].includes(upper)) {
+        localStorage.setItem('docmind_subscription', 'true');
+        localStorage.setItem('docmind_trials', '9999');
+        return true;
+      }
+      return false;
+    }
+
+    // =============== Icon ===============
+    function Icon({ name, size = 18, className = '' }) {
+      const ref = useRef(null);
+      useEffect(() => {
+        if (ref.current && window.lucide) {
+          ref.current.innerHTML = `<i data-lucide="${name}" style="width:${size}px;height:${size}px"></i>`;
+          window.lucide.createIcons({ nodes: [ref.current] });
+        }
+      }, [name, size]);
+      return <span ref={ref} className={`inline-flex shrink-0 ${className}`} aria-hidden="true" />;
+    }
+
+    // =============== تنظيف النص ===============
+    function cleanRepeatedText(raw) {
+      if (!raw) return '';
+      const words = raw.split(/\s+/);
+      const cleaned = [];
+      for (let i = 0; i < words.length; i++) {
+        if (i === 0 || words[i] !== words[i - 1]) cleaned.push(words[i]);
+      }
+      return cleaned.join(' ');
+    }
+
+    // =============== قالب محلي احتياطي ===============
+    function buildDocument(request) {
+      const date = new Intl.DateTimeFormat('ar-EG', { dateStyle: 'long' }).format(new Date());
+      const cleaned = cleanRepeatedText(request.trim());
+      return `[DOCMIND AI | ${date}]\n\n${cleaned}\n\nحرر في ${date}\nمقدم الطلب: ........................`;
+    }
+
+    // =============== استدعاء DeepSeek عبر وسيط CORS عام ===============
+    async function requestDeepSeek(prompt) {
+      const proxyUrl = 'https://corsproxy.io/?' + encodeURIComponent('https://api.deepseek.com/v1/chat/completions');
+      const res = await fetch(proxyUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: DEEPSEEK_MODEL,
+          temperature: 0.3,
+          messages: [
+            { role: 'system', content: 'أنت خبير قانوني مصري. اصغ للمستخدم واصغ المستند المطلوب بأسلوب قانوني رصين.' },
+            { role: 'user', content: prompt }
+          ]
+        })
+      });
+      if (!res.ok) throw new Error('DeepSeek error');
+      const data = await res.json();
+      return data.choices?.[0]?.message?.content || buildDocument(prompt);
+    }
+
+    // =============== تصدير PDF ===============
+    async function exportPDF(element) {
+      const canvas = await html2canvas(element, { scale: 2 });
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jspdf.jsPDF('p', 'mm', 'a4');
+      const width = pdf.internal.pageSize.getWidth();
+      const height = (canvas.height * width) / canvas.width;
+      pdf.addImage(imgData, 'PNG', 0, 0, width, height);
+      pdf.save('DOCMIND-مستند.pdf');
+    }
+
+    // =============== مكون التطبيق ===============
+    function App() {
+      const [prompt, setPrompt] = useState('');
+      const [documentText, setDocumentText] = useState('');
+      const [history, setHistory] = useState(JSON.parse(localStorage.getItem('docmind_drafts') || '[]'));
+      const [isRecording, setIsRecording] = useState(false);
+      const [isGenerating, setIsGenerating] = useState(false);
+      const [message, setMessage] = useState('');
+      const [showAdminPanel, setShowAdminPanel] = useState(false);
+      const recognitionRef = useRef(null);
+      const resultRef = useRef(null);
+
+      useEffect(() => { localStorage.setItem('docmind_drafts', JSON.stringify(history)); }, [history]);
+
+      // الإملاء الصوتي
+      useEffect(() => {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) return;
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'ar-EG';
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.onresult = (event) => {
+          let finalText = '';
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            if (event.results[i].isFinal) finalText += event.results[i][0].transcript + ' ';
+          }
+          if (finalText) setPrompt(prev => `${prev} ${finalText}`.trim());
+        };
+        recognition.onend = () => { if (isRecording) recognition.start(); else setIsRecording(false); };
+        recognition.onerror = () => setIsRecording(false);
+        recognitionRef.current = recognition;
+        return () => { try { recognition.stop(); } catch (e) {} };
+      }, [isRecording]);
+
+      const toggleRecording = () => {
+        if (!recognitionRef.current) return;
+        if (isRecording) recognitionRef.current.stop();
+        else { recognitionRef.current.start(); setIsRecording(true); setMessage(''); }
+      };
+
+      const generate = async () => {
+        const cleaned = cleanRepeatedText(prompt.trim());
+        if (!cleaned) return;
+
+        // التحقق من الترخيص
+        if (!isAdmin() && !hasActiveSubscription()) {
+          const rem = getRemainingTrials();
+          if (rem <= 0) {
+            const code = prompt("انتهت التجارب، أدخل كود التفعيل:");
+            if (code && await activateSubscription(code)) alert('تم التفعيل!');
+            else alert('كود غير صالح');
+            return;
+          }
+          if (!isAdmin() && !hasActiveSubscription()) consumeTrial();
+        }
+
+        setIsGenerating(true);
+        try {
+          let output;
+          try {
+            output = await requestDeepSeek(cleaned);
+          } catch {
+            output = buildDocument(cleaned);
+            setMessage('تم استخدام القالب المحلي لتعذر الاتصال.');
+          }
+          setDocumentText(output);
+          setHistory(prev => [{ id: Date.now(), prompt: cleaned, document: output, createdAt: new Date().toISOString() }, ...prev].slice(0, 20));
+        } finally { setIsGenerating(false); }
+      };
+
+      const copyDocument = () => { navigator.clipboard.writeText(documentText); setMessage('تم النسخ!'); };
+      const exportToWord = () => {
+        const blob = new Blob([`<html dir="rtl"><body>${documentText.replace(/\n/g, '<br>')}</body></html>`], { type: 'application/msword' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = 'مستند.doc'; a.click();
+      };
+
+      const openAdminPanel = () => { if (isAdmin()) setShowAdminPanel(true); else alert('أنت لست المالك'); };
+
+      return (
+        <div className="min-h-screen bg-navy font-cairo relative">
+          <header className="sticky top-0 z-20 glass border-b border-slate-700/70 bg-navy/90 backdrop-blur-xl">
+            <div className="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
+              <div className="flex items-center gap-3">
+                <div className="gold-shadow w-10 h-10 bg-gold rounded-xl flex items-center justify-center cursor-pointer" onDoubleClick={openAdminPanel}>
+                  <Icon name="scale" size={22} className="text-navy" />
+                </div>
+                <h1 className="text-xl font-extrabold text-white">DOCMIND <span className="text-gold">AI</span> <span className="text-sm font-normal text-slate-400">| صياغتي</span></h1>
+              </div>
+            </div>
+          </header>
+
+          <main className="max-w-7xl mx-auto p-4 grid lg:grid-cols-[1fr_280px] gap-6">
+            <div>
+              <div className="glass rounded-2xl p-5 mb-5">
+                <textarea value={prompt} onChange={e => setPrompt(e.target.value)} rows="6" placeholder="اكتب أو تحدث... مثال: أريد صحيفة استئناف حكم..." className="w-full bg-slate-800/70 border border-slate-600 rounded-xl p-4 text-white resize-none" />
+                {message && <p className="text-amber-300 text-sm mt-2">{message}</p>}
+                <div className="flex gap-3 mt-4">
+                  <button onClick={toggleRecording} className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold ${isRecording ? 'bg-red-500/20 text-red-400 pulse-recording' : 'bg-slate-700 text-white'}`}>
+                    <Icon name={isRecording ? 'square' : 'mic'} /> {isRecording ? 'جاري التسجيل' : 'إملاء صوتي'}
+                  </button>
+                  <button onClick={generate} disabled={isGenerating} className="flex-1 bg-gold text-navy font-extrabold rounded-xl py-2.5 flex items-center justify-center gap-2 gold-shadow hover:bg-yellow-300 transition">
+                    {isGenerating ? <Icon name="loader-circle" className="animate-spin" /> : <Icon name="sparkles" />}
+                    {isGenerating ? 'صياغة...' : 'إنشاء المستند'}
+                  </button>
+                </div>
+              </div>
+
+              {documentText && (
+                <div className="bg-white text-navy rounded-2xl p-5 shadow-2xl" ref={resultRef}>
+                  <div className="flex justify-between mb-3 no-print">
+                    <h2 className="font-bold text-lg flex items-center gap-2"><Icon name="file-check-2" className="text-amber-600" /> مسودة المستند</h2>
+                    <div className="flex gap-2">
+                      <button onClick={copyDocument} className="p-2 hover:bg-slate-100 rounded-lg"><Icon name="copy" /></button>
+                      <button onClick={() => exportPDF(resultRef.current)} className="p-2 hover:bg-slate-100 rounded-lg"><Icon name="file-text" /></button>
+                      <button onClick={exportToWord} className="p-2 hover:bg-slate-100 rounded-lg"><Icon name="file-down" /></button>
+                      <button onClick={window.print} className="p-2 hover:bg-slate-100 rounded-lg"><Icon name="printer" /></button>
+                    </div>
+                  </div>
+                  <div contentEditable suppressContentEditableWarning={true} className="whitespace-pre-wrap text-sm leading-7 min-h-[200px] border-0 outline-none" dangerouslySetInnerHTML={{ __html: documentText.replace(/\n/g, '<br>') }} />
+                  <p className="text-amber-700 text-xs mt-3 border-t border-amber-200 pt-2">مسودة أولية للمراجعة، ولا تغني عن استشارة محامٍ.</p>
+                </div>
+              )}
+            </div>
+
+            <aside className="glass rounded-2xl p-4 h-fit">
+              <h3 className="font-bold flex items-center gap-2 mb-3"><Icon name="history" className="text-gold" /> السجل</h3>
+              <div className="space-y-2 max-h-[50vh] overflow-auto">
+                {history.map(item => (
+                  <button key={item.id} onClick={() => { setPrompt(item.prompt); setDocumentText(item.document); }} className="w-full text-right p-2 bg-slate-800/50 rounded-lg text-sm hover:bg-slate-700/50 transition">
+                    <p className="truncate text-slate-300">{item.prompt}</p>
+                  </button>
+                ))}
+                {history.length === 0 && <p className="text-slate-500 text-sm text-center py-4">فارغ</p>}
+              </div>
+            </aside>
+          </main>
+
+          {showAdminPanel && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center" onClick={() => setShowAdminPanel(false)}>
+              <div className="glass bg-navy/90 p-6 rounded-2xl w-80 text-center" onClick={e => e.stopPropagation()}>
+                <h2 className="text-gold text-xl font-bold mb-4">لوحة التحكم</h2>
+                <p className="text-white">التجارب المتبقية: {getRemainingTrials()}</p>
+                <p className="text-white">الاشتراك: {hasActiveSubscription() ? 'مفعل' : 'غير مفعل'}</p>
+                <button onClick={() => setShowAdminPanel(false)} className="mt-4 bg-gold text-navy px-4 py-2 rounded-lg font-bold">إغلاق</button>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('docmind-root')).render(<App />);
+  </script>
+</body>
+</html>
