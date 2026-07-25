@@ -38,20 +38,11 @@
   <script type="text/babel">
     const { useEffect, useRef, useState } = React;
 
-    // =============== الإعدادات الأساسية ===============
     const ADMIN_SECRET = "123456";
     const FREE_TRIALS = 5;
-    const DEEPSEEK_API_KEY = 'sk-7aae0cf38f0741cfb1a67a0dbc9759c7'; // مفتاحك هنا
+    const DEEPSEEK_API_KEY = 'sk-7aae0cf38f0741cfb1a67a0dbc9759c7';
     const DEEPSEEK_MODEL = 'deepseek-chat';
 
-    // =============== بصمة الجهاز ===============
-    async function getDeviceId() {
-      const fp = await FingerprintJS.load();
-      const result = await fp.get();
-      return result.visitorId;
-    }
-
-    // =============== الترخيص ===============
     function isAdmin() { return localStorage.getItem('docmind_admin') === 'true'; }
     function getRemainingTrials() {
       const stored = localStorage.getItem('docmind_trials');
@@ -75,7 +66,6 @@
       return false;
     }
 
-    // =============== Icon ===============
     function Icon({ name, size = 18, className = '' }) {
       const ref = useRef(null);
       useEffect(() => {
@@ -87,7 +77,6 @@
       return <span ref={ref} className={`inline-flex shrink-0 ${className}`} aria-hidden="true" />;
     }
 
-    // =============== تنظيف النص ===============
     function cleanRepeatedText(raw) {
       if (!raw) return '';
       const words = raw.split(/\s+/);
@@ -98,14 +87,12 @@
       return cleaned.join(' ');
     }
 
-    // =============== قالب محلي احتياطي ===============
     function buildDocument(request) {
       const date = new Intl.DateTimeFormat('ar-EG', { dateStyle: 'long' }).format(new Date());
       const cleaned = cleanRepeatedText(request.trim());
       return `[DOCMIND AI | ${date}]\n\n${cleaned}\n\nحرر في ${date}\nمقدم الطلب: ........................`;
     }
 
-    // =============== استدعاء DeepSeek عبر وسيط CORS عام ===============
     async function requestDeepSeek(prompt) {
       const proxyUrl = 'https://corsproxy.io/?' + encodeURIComponent('https://api.deepseek.com/v1/chat/completions');
       const res = await fetch(proxyUrl, {
@@ -128,7 +115,6 @@
       return data.choices?.[0]?.message?.content || buildDocument(prompt);
     }
 
-    // =============== تصدير PDF ===============
     async function exportPDF(element) {
       const canvas = await html2canvas(element, { scale: 2 });
       const imgData = canvas.toDataURL('image/png');
@@ -139,7 +125,6 @@
       pdf.save('DOCMIND-مستند.pdf');
     }
 
-    // =============== مكون التطبيق ===============
     function App() {
       const [prompt, setPrompt] = useState('');
       const [documentText, setDocumentText] = useState('');
@@ -148,12 +133,13 @@
       const [isGenerating, setIsGenerating] = useState(false);
       const [message, setMessage] = useState('');
       const [showAdminPanel, setShowAdminPanel] = useState(false);
+      const [adminInput, setAdminInput] = useState('');
+      const [showAdminInput, setShowAdminInput] = useState(false);
       const recognitionRef = useRef(null);
       const resultRef = useRef(null);
 
       useEffect(() => { localStorage.setItem('docmind_drafts', JSON.stringify(history)); }, [history]);
 
-      // الإملاء الصوتي
       useEffect(() => {
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) return;
@@ -184,7 +170,6 @@
         const cleaned = cleanRepeatedText(prompt.trim());
         if (!cleaned) return;
 
-        // التحقق من الترخيص
         if (!isAdmin() && !hasActiveSubscription()) {
           const rem = getRemainingTrials();
           if (rem <= 0) {
@@ -217,7 +202,24 @@
         const a = document.createElement('a'); a.href = url; a.download = 'مستند.doc'; a.click();
       };
 
-      const openAdminPanel = () => { if (isAdmin()) setShowAdminPanel(true); else alert('أنت لست المالك'); };
+      const handleAdminActivation = () => {
+        if (adminInput === ADMIN_SECRET) {
+          localStorage.setItem('docmind_admin', 'true');
+          setShowAdminInput(false);
+          setAdminInput('');
+          setShowAdminPanel(true);
+        } else {
+          alert('كود المالك غير صحيح');
+        }
+      };
+
+      const openAdminPanel = () => {
+        if (isAdmin()) {
+          setShowAdminPanel(true);
+        } else {
+          setShowAdminInput(true);
+        }
+      };
 
       return (
         <div className="min-h-screen bg-navy font-cairo relative">
@@ -229,6 +231,7 @@
                 </div>
                 <h1 className="text-xl font-extrabold text-white">DOCMIND <span className="text-gold">AI</span> <span className="text-sm font-normal text-slate-400">| صياغتي</span></h1>
               </div>
+              <button onClick={openAdminPanel} className="text-xs bg-slate-800 rounded-lg px-3 py-1.5 text-slate-300 hover:text-gold">🔑 المالك</button>
             </div>
           </header>
 
@@ -277,6 +280,17 @@
               </div>
             </aside>
           </main>
+
+          {showAdminInput && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center" onClick={() => setShowAdminInput(false)}>
+              <div className="glass bg-navy/90 p-6 rounded-2xl w-80 text-center" onClick={e => e.stopPropagation()}>
+                <h2 className="text-gold text-xl font-bold mb-4">تفعيل المالك</h2>
+                <input type="password" value={adminInput} onChange={e => setAdminInput(e.target.value)} placeholder="أدخل الكود السري" className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-center" dir="ltr" />
+                <button onClick={handleAdminActivation} className="mt-4 bg-gold text-navy px-6 py-2 rounded-lg font-bold w-full">تفعيل</button>
+                <button onClick={() => setShowAdminInput(false)} className="mt-2 text-slate-400 text-sm">إلغاء</button>
+              </div>
+            </div>
+          )}
 
           {showAdminPanel && (
             <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center" onClick={() => setShowAdminPanel(false)}>
